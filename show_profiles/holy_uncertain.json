@@ -1,0 +1,15 @@
+{
+  "show_id": "HU",
+  "show_name": "Holy Uncertain",
+  "session_name_prefix": "HU-",
+  "hosts": ["Chris", "Lauren"],
+  "dialogue_tracks": ["Chris", "Lauren Int R", "Chris Int R",
+                       "Chris Int R.dup1", "Chris end"],
+  "guest_tracks": ["Randy Int R"],
+  "music_tracks": ["Music"],
+  "transcript_export_path": "/Volumes/BE-Media (RAID 0)/Dropbox (Personal)/01 Podcasts/Holy Uncertain/Episodes/",
+  "naming_conventions": {
+    "session": "HU-{episode_number}-{guest_last_name}-V{version}",
+    "export": "HU-{episode_number}-{guest_last_name}-MIX-V{version}"
+  }
+}

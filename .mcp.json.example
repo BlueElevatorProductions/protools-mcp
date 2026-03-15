@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "protools-mcp": {
+      "command": "/path/to/protools-mcp/venv/bin/python",
+      "args": ["/path/to/protools-mcp/server.py"]
+    }
+  }
+}
