@@ -52,3 +52,15 @@ def samples_to_timecode(samples: int, sample_rate: int = 48000, fps: int = 24) -
 def is_sample_position(value: str) -> bool:
     """Check if a string looks like a raw sample position (all digits)."""
     return value.isdigit()
+
+
+def ms_to_timecode(ms: int, fps: int = 24) -> str:
+    """Convert milliseconds to HH:MM:SS:FF timecode."""
+    total_seconds = ms / 1000.0
+    frames = int((total_seconds % 1) * fps)
+    total_whole_seconds = int(total_seconds)
+    s = total_whole_seconds % 60
+    total_minutes = total_whole_seconds // 60
+    m = total_minutes % 60
+    h = total_minutes // 60
+    return f"{h:02d}:{m:02d}:{s:02d}:{frames:02d}"

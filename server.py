@@ -29,12 +29,14 @@ from tools.tracks import register_track_tools
 from tools.transcript import register_transcript_tools
 from tools.navigation import register_navigation_tools
 from tools.edit import register_edit_tools
+from tools.paper_edit import register_paper_edit_tools
 
 register_session_tools(mcp, bridge, profile_loader)
 register_track_tools(mcp, bridge)
 register_transcript_tools(mcp, transcript_watcher, bridge, profile_loader)
 register_navigation_tools(mcp, bridge)
 register_edit_tools(mcp, bridge)
+register_paper_edit_tools(mcp, bridge)
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")

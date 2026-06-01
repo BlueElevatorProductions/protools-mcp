@@ -69,3 +69,25 @@ def register_track_tools(mcp: FastMCP, bridge):
                     continue
 
         return results
+
+    @mcp.tool()
+    def import_audio(file_paths: List[str]) -> dict:
+        """[WRITE] Import one or more audio files into the currently-open session.
+        Imported files create new tracks at session start (or are spotted to existing
+        tracks when names match). Useful for assembling raw interview material into a
+        production session.
+
+        :param file_paths: Absolute paths to .wav / .aif / .mp3 / etc files on disk.
+        """
+        result = bridge.import_audio_files(file_list=file_paths)
+        return _check_error(result)
+
+    @mcp.tool()
+    def set_track_name(old_name: str, new_name: str) -> dict:
+        """[WRITE] Rename a track in the currently-open session by its current name.
+
+        :param old_name: The track's current name as shown in Pro Tools.
+        :param new_name: The new name to apply.
+        """
+        result = bridge.rename_track(old_name=old_name, new_name=new_name)
+        return _check_error(result)

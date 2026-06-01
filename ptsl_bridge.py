@@ -57,6 +57,12 @@ class GetPlaylistElements(Operation):
         return _json.dumps(d)
 
 
+class Undo(Operation):
+    @classmethod
+    def command_id(cls):
+        return getattr(pt, "CId_Undo", 104)
+
+
 class PTSLConnectionError(Exception):
     """Raised when PTSL connection cannot be established."""
     pass
@@ -510,6 +516,247 @@ class PTSLBridge:
         new_name = engine.session_name()
         new_path = engine.session_path()
         return {"confirmed": True, "session_name": new_name, "session_path": new_path}
+
+    # ── Edit Mode & Editing ──
+
+    @ptsl_command
+    def get_edit_mode(self, engine) -> str:
+        op = ops.GetEditMode()
+        engine.client.run(op)
+        mode_enum = op.response.current_setting
+        return pt.EditMode.Name(mode_enum)
+
+    @ptsl_command
+    def set_edit_mode(self, engine, mode: str):
+        mode_map = {
+            "shuffle": pt.EMode_Shuffle,
+            "slip": pt.EMode_Slip,
+            "spot": pt.EMode_Spot,
+            "grid_absolute": pt.EMode_GridAbsolute,
+            "grid_relative": pt.EMode_GridRelative,
+        }
+        mode_enum = mode_map.get(mode.lower())
+        if mode_enum is None:
+            return {"error": "invalid_mode",
+                    "message": f"Unknown edit mode '{mode}'. Use: shuffle, slip, spot, grid_absolute, grid_relative"}
+        engine.client.run(ops.SetEditMode(edit_mode=mode_enum))
+        return {"confirmed": True, "edit_mode": mode}
+
+    @ptsl_command
+    def clear_selection(self, engine):
+        engine.client.run(ops.Clear())
+        return {"confirmed": True}
+
+    @ptsl_command
+    def cut_selection(self, engine):
+        engine.client.run(ops.Cut())
+        return {"confirmed": True}
+
+    @ptsl_command
+    def create_fades(self, engine, preset_name: str = "", auto_adjust: bool = True):
+        engine.client.run(ops.CreateFadesBasedOnPreset(
+            fade_preset_name=preset_name,
+            auto_adjust_bounds=auto_adjust
+        ))
+        return {"confirmed": True}
+
+    @ptsl_command
+    def trim_to_selection(self, engine):
+        engine.client.run(ops.TrimToSelection())
+        return {"confirmed": True}
+
+    @ptsl_command
+    def extend_selection_to_target_tracks(self, engine, track_names: list):
+        engine.client.run(ops.ExtendSelectionToTargetTracks(
+            tracks_to_extend_to=track_names
+        ))
+        return {"confirmed": True}
+
+    @ptsl_command
+    def undo(self, engine):
+        op = Undo()
+        engine.client.run(op)
+        return {"confirmed": True}
+
+    # ── Import / Rename / Bounce (added 2026-04-29) ──
+
+    @ptsl_command
+    def import_audio_files(self, engine, file_list: List[str],
+                           audio_operations: str = "CopyAudio",
+                           destination: str = "NewTrack",
+                           location: str = "SessionStart") -> dict:
+        """Import audio file(s) into the open session.
+
+        py-ptsl 601.0.0 has a bug — its `engine.import_audio` hardcodes
+        `import_type=1` (Session), which makes Pro Tools reject the request as
+        "The path to the imported session is missed." We bypass that and call
+        CId_Import directly with `import_type=2` (Audio).
+
+        :param file_list: Absolute paths to audio files.
+        :param audio_operations: "AddAudio" | "CopyAudio" | "ConvertAudio" | "Default".
+            CopyAudio (default) copies files into the session's Audio Files folder.
+        :param destination: "NewTrack" | "ClipList" | "MainVideoTrack". Default
+            "NewTrack" creates a new track per file.
+        :param location: "SessionStart" | "SongStart" | "Selection" | "Spot".
+        """
+        ao_map = {
+            "AddAudio": pt.AOperations_AddAudio,
+            "CopyAudio": pt.AOperations_CopyAudio,
+            "ConvertAudio": pt.AOperations_ConvertAudio,
+            "Default": pt.AOperations_Default,
+        }
+        md_map = {
+            "NewTrack": pt.MD_NewTrack,
+            "ClipList": pt.MD_ClipList,
+            "MainVideoTrack": pt.MD_MainVideoTrack,
+        }
+        ml_map = {
+            "SessionStart": pt.ML_SessionStart,
+            "SongStart": pt.ML_SongStart,
+            "Selection": pt.ML_Selection,
+            "Spot": pt.ML_Spot,
+        }
+        if audio_operations not in ao_map:
+            raise ValueError(f"audio_operations must be in {list(ao_map)}")
+        if destination not in md_map:
+            raise ValueError(f"destination must be in {list(md_map)}")
+        if location not in ml_map:
+            raise ValueError(f"location must be in {list(ml_map)}")
+
+        location_data = pt.SpotLocationData(
+            location_type=pt.SLType_Start,
+            location_options=pt.TOOptions_TimeCode,
+        )
+        audio_data = pt.AudioData(
+            file_list=file_list,
+            audio_operations=ao_map[audio_operations],
+            audio_destination=md_map[destination],
+            audio_location=ml_map[location],
+            location_data=location_data,
+        )
+        # import_type=2 = Audio (py-ptsl hardcodes 1 = Session, which is the bug)
+        op = ops.CId_Import(import_type=pt.IType_Audio, audio_data=audio_data)
+        engine.client.run(op)
+        return {
+            "imported": len(file_list),
+            "files": file_list,
+            "audio_operations": audio_operations,
+            "destination": destination,
+            "location": location,
+        }
+
+    @ptsl_command
+    def rename_track(self, engine, old_name: str, new_name: str) -> dict:
+        """Rename a single track by name."""
+        engine.rename_target_track(old_name, new_name)
+        return {"old_name": old_name, "new_name": new_name}
+
+    @ptsl_command
+    def bounce_to_disk(
+        self,
+        engine,
+        output_dir: str,
+        base_name: str,
+        file_type: str = "MP3",
+        source_name: str = "Out 1-2",
+        source_type: str = "Output",
+        export_format: str = "Interleaved",
+        bit_depth: int = 16,
+        sample_rate: int = 48000,
+        offline: bool = True,
+    ) -> dict:
+        """Export the active mix bus(es) to disk — equivalent to PT's "Bounce to Disk".
+
+        :param output_dir: Folder to write the bounce into.
+        :param base_name:  File-name stem (extension added by Pro Tools).
+        :param file_type:  "MP3" | "WAV" | "AIFF" | "MOV" | "M4A".
+        :param source_name: Bus / output name to bounce (default "Out 1-2").
+        :param source_type: "Output" | "Bus" | "PhysicalOut".
+        :param export_format: "Interleaved" (stereo) | "Mono" | "MultipleMono".
+        :param bit_depth:  16 | 24 | 32 (32 = float). Ignored for MP3.
+        :param sample_rate: 44100 | 48000 | 88200 | 96000 | 176400 | 192000.
+        :param offline: True for offline (faster-than-realtime) bounce.
+        """
+        # Map string params → proto enum values
+        ft_map = {
+            "MP3": pt.EMFType_MP3,
+            "WAV": pt.EMFType_WAV,
+            "AIFF": pt.EMFType_AIFF,
+            "MOV": pt.EMFType_MOV,
+            "M4A": pt.EMFType_M4A,
+        }
+        st_map = {
+            "Output": pt.EMSType_Output,
+            "Bus": pt.EMSType_Bus,
+            "PhysicalOut": pt.EMSType_PhysicalOut,
+        }
+        ef_map = {
+            "Interleaved": pt.EFormat_Interleaved,
+            "Mono": pt.EFormat_Mono,
+            "MultipleMono": pt.EFormat_MultipleMono,
+        }
+        bd_map = {16: pt.BDepth_16, 24: pt.BDepth_24, 32: pt.BDepth_32Float}
+        sr_map = {
+            44100: pt.SRate_44100,
+            48000: pt.SRate_48000,
+            88200: pt.SRate_88200,
+            96000: pt.SRate_96000,
+            176400: pt.SRate_176400,
+            192000: pt.SRate_192000,
+        }
+
+        if file_type not in ft_map:
+            raise ValueError(f"file_type must be one of {list(ft_map.keys())}")
+        if source_type not in st_map:
+            raise ValueError(f"source_type must be one of {list(st_map.keys())}")
+        if export_format not in ef_map:
+            raise ValueError(f"export_format must be one of {list(ef_map.keys())}")
+        if bit_depth not in bd_map:
+            raise ValueError(f"bit_depth must be one of {list(bd_map.keys())}")
+        if sample_rate not in sr_map:
+            raise ValueError(f"sample_rate must be one of {list(sr_map.keys())}")
+
+        audio_info = pt.EM_AudioInfo(
+            compression_type=pt.CT_PCM,
+            export_format=ef_map[export_format],
+            bit_depth=bd_map[bit_depth],
+            sample_rate=sr_map[sample_rate],
+            pad_to_frame_boundary=pt.TB_False,
+            delivery_format=pt.EM_DF_SingleFile,
+        )
+        sources = [pt.EM_SourceInfo(source_type=st_map[source_type], name=source_name)]
+        video_info = pt.EM_VideoInfo(
+            include_video=pt.TB_False,
+            export_option=pt.VE_None,
+            replace_timecode_track=pt.TB_False,
+        )
+        location_info = pt.EM_LocationInfo(
+            import_after_bounce=pt.TB_False,
+            file_destination=pt.EM_FD_Directory,
+            directory=output_dir,
+        )
+        dolby_atmos_info = pt.EM_DolbyAtmosInfo()  # empty for non-Atmos bounce
+
+        engine.export_mix(
+            base_name=base_name,
+            file_type=ft_map[file_type],
+            sources=sources,
+            audio_info=audio_info,
+            video_info=video_info,
+            location_info=location_info,
+            dolby_atmos_info=dolby_atmos_info,
+            offline_bounce=pt.TB_True if offline else pt.TB_False,
+        )
+        return {
+            "output_dir": output_dir,
+            "base_name": base_name,
+            "file_type": file_type,
+            "source": source_name,
+            "format": export_format,
+            "sample_rate": sample_rate,
+            "bit_depth": bit_depth,
+            "offline": offline,
+        }
 
 
 def parse_edl_text(text: str) -> Dict[str, List[Dict[str, Any]]]:
