@@ -330,7 +330,15 @@ class PTSLBridge:
 
     @ptsl_command
     def create_marker(self, engine, name: str, timecode: str, comment: str = ""):
+        # PTSL without an explicit number always assigns 32000, so the second
+        # marker fails with "number is already used". Pick the next free one.
+        used = {m.number for m in engine.get_memory_locations()}
+        below_default = [n for n in used if n < 32000]
+        next_number = (max(below_default) if below_default else 0) + 1
+        while next_number in used:
+            next_number += 1
         engine.create_memory_location(
+            memory_number=next_number,
             name=name,
             start_time=timecode,
             time_properties=pt.TP_Marker,
@@ -339,7 +347,7 @@ class PTSLBridge:
         )
         # Get the new marker index by re-fetching markers
         markers = engine.get_memory_locations()
-        new_marker = next((m for m in markers if m.name == name), None)
+        new_marker = next((m for m in markers if m.number == next_number), None)
         marker_index = new_marker.number if new_marker else -1
         return {"marker_index": marker_index, "confirmed": True}
 
